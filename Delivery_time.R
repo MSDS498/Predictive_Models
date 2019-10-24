@@ -146,7 +146,7 @@ distance_calcn_rough <- function(start_lat, start_long, end_lat, end_long){
   
   cosine_val <- sin(start_lat)*sin(end_lat) + cos(start_lat)*cos(end_lat)*cos(start_long - end_long)
   
-  if (cosine_val > 1 | cosine_val < -1){ round(cosine_val, 6) }     #round it off so we aren't losing cases due to machine precision issues (esp. when cosine_val ~1 b/c they are at the exact same location)
+  if (cosine_val > 1 | cosine_val < -1){ cosine_val <- round(cosine_val, 6) }     #round it off so we aren't losing cases due to machine precision issues (esp. when cosine_val ~1 b/c they are at the exact same location)
 
   if (cosine_val > 1 | cosine_val < -1){
     rtrn_val <-NaN}
@@ -359,23 +359,112 @@ order_delivery <- dt_raw_2 %>% group_by(order_id) %>% dplyr::summarise(min_deliv
 #Shows the seller shipping limit date for handling the order over to the logistic partner.
 #TODO:  does missing the shipping limit date ever happen?   if so, how does it impact the ontime delivery of the order
           #primarily for the shipping limit_final, but check initial, and/or multiple misses???
+#dt_raw_2$missed_shipping_limit_dt_flag <- 
+shipping_limit_probs <- dt_raw_2 %>% group_by(order_id) %>% 
+                summarize(max_shipping_limit=max(shipping_limit_date),
+                          delivered_to_carrier_dt=max(order_delivered_carrier_date),
+                          delivered_to_cust_dt=max(order_delivered_customer_date),
+                          est_cust_delivery_dt=max(order_estimated_delivery_date)) %>%
+                    mutate(shipping_limit_problem_flag=case_when( max_shipping_limit < delivered_to_carrier_dt ~ 1, TRUE ~ 0),
+                           late_delivery_flag=case_when( delivered_to_cust_dt > est_cust_delivery_dt+86400 ~ 1, TRUE ~ 0))
+
+sum(shipping_limit_probs$shipping_limit_problem_flag)
+#8690 orders had at least one item miss their shipping limit (cutoff)
+
+sum(shipping_limit_probs$late_delivery_flag)
+#6510 orders were delivered late
+
+
+#odds of delivering late if shipping limit is missed?
+shipping_limit_probs %>% filter(shipping_limit_problem_flag == 1 & late_delivery_flag == 1 ) %>% nrow()
+#1814 / 8690  # 20.87%
+
+#vs odds of late delivery for an order received at the shipper on time
+shipping_limit_probs %>% filter(shipping_limit_problem_flag == 0) %>% nrow()   #86,396
+shipping_limit_probs %>% filter(shipping_limit_problem_flag == 0 & late_delivery_flag == 1 ) %>% nrow()  #4696
+#4695/86396   # 5.4%
 
 
 #TODO:  check if multiple installments/multiple pmt methods slows down approval    orders.order_approval defn: Shows the payment approval timestamp.
+multiple_items_probs <- dt_raw_2 %>% group_by(order_id) %>%
+                            summarize(
+                                  nbr_items=n(),
+                                  purchase_dt=max(order_purchase_timestamp),
+                                  approval_dt=max(order_approved_at),
+                                  delivered_to_carrier_dt=max(order_delivered_carrier_date),
+                                  delivered_to_cust_dt=max(order_delivered_customer_date),
+                                  est_cust_delivery_dt=max(order_estimated_delivery_date)) %>%
+                              mutate(approval_time = approval_dt - purchase_dt,
+                                     late_delivery_flag=case_when( delivered_to_cust_dt > est_cust_delivery_dt+86400 ~ 1, TRUE ~ 0),
+                                     est_time = est_cust_delivery_dt - purchase_dt)
 
-#TODo:  if the review answer date is after the delivery, then it seems more likely to reflect the delivery performance than predict it
+multiple_items_probs$approval_time <- as.numeric(multiple_items_probs$approval_time, units='secs')/86400
+multiple_items_probs$est_time <- as.numeric(multiple_items_probs$est_time, units='days')
+boxplot(approval_time ~ nbr_items, data=multiple_items_probs, main='Approval time as a function of item count', ylab='Approval time (days)', xlab='Items per order')
+
+summary(multiple_items_probs)
+  #amazing, mean and median for est delivery time is ~23 DAYS!  not exactly Amazon-like turnaround!!
+  #note the approval time is less than a day in 75% of the cases
+hist(multiple_items_probs$approval_time, breaks=seq(0,31,1/24))   #with 20 divisions per day (0.05 gap size), we get ~ hourly buckets
+#heavily skewed to an hour or two
+ecdf(multiple_items_probs$approval_time)(1)  #empirical cumulative distribution.   1 day is the 83rd percentile of the time distro (83% of the orders have approval time of 1 day or less)
+
+#odds of late delivery with approval time > 1 day vs. <1 day  (90? 95% of cases)
+multiple_items_probs %>% filter(approval_time <= 1) %>% nrow()   #79,181
+multiple_items_probs %>% filter(approval_time <= 1 & late_delivery_flag==1) %>% nrow()   #5,161
+#5161/79181 #  6.52%
+
+multiple_items_probs %>% filter(approval_time > 1) %>% nrow()   #15,905
+multiple_items_probs %>% filter(approval_time > 1 & late_delivery_flag==1) %>% nrow()   #1,349
+#1349/15905 #  8.48%
+
+  #some increase in odds of being late for orders that take more than 1 day to approve
+
+
+
+# check if multiple items increases the odds of late delivery
+late_delivery_odds_by_item_cnt <- multiple_items_probs %>% group_by(nbr_items) %>%
+                                      summarize(ttl_orders=n(),
+                                                orders_late=sum(late_delivery_flag)) %>%
+                                        mutate(pct_late=orders_late/ttl_orders)
+
+plot(late_delivery_odds_by_item_cnt$nbr_items, late_delivery_odds_by_item_cnt$pct_late)
+View(late_delivery_odds_by_item_cnt)
+#actually it's the opposite - more items tends to have higher?!?! ontime delivery - is est delivery date padded more??
+  
+boxplot(est_time ~ nbr_items, data=multiple_items_probs, main='Estimated delivery time vs items per order', ylab='Estimated delivery time (days)', xlab='Items per order')
+#very slight increase in estimated time for higher # of items but surprisingly little
+
+
+multiple_items_probs$est_time_daybuckets <- ceiling(multiple_items_probs$est_time)
+
+late_deliv_by_est_time <- multiple_items_probs %>% group_by(est_time_daybuckets) %>%
+                            summarize(orders=n(),
+                                      orders_late=sum(late_delivery_flag)) %>%
+                              mutate(pct_late=orders_late/orders)
+
+plot(late_deliv_by_est_time$est_time_daybuckets, late_deliv_by_est_time$pct_late, main='% Late Delivery by Estimated Delivery Time', xlab='Estimated Delivery Time (days)', ylab='Percent of orders delivered late')
+  #not surprisingly, the longer cushion is given on the est time to deliver, the less likely it is late
+
+
+
+
+
+
+
 #TODO:  can we predict low sentiment / review score  as a function of ontime delivery, seller, # of photos, product, price, # of reviews, avg score on other reviews, "buy local" (same state/city seller-cust), avg score on other reviews, ...???
-#TODO:  can we do time series analysis and see how a negative review changes trajectory????  (quantify $ value of a negative review!!)
 #TODO:  can we look at all first time custs and compare the odds of a 2nd order for happy reviewers vs. unhappy reviewers?
+#TODO:  can we do time series analysis and see how a negative review changes trajectory????  (quantify $ value of a negative review!!)
+#TODo:  if the review answer date is after the delivery, then it seems more likely to reflect the delivery performance than predict it
 
 numeric_cols2 <- c(numeric_cols, 'delivery_time_carrier_to_cust')
 # numeric_cols3 <- append(numeric_cols, 'delivery_time_carrier_to_cust')
 # numeric_cols3 == numeric_cols2
 
-customer_zip_code_prefix
-customer_city
-customer_state
-payment_installments
+# customer_zip_code_prefix
+# customer_city
+# customer_state
+# payment_installments
 
 
 corr_mtrx <- cor(dt_raw_2[, ..numeric_cols2], use="complete.obs")
