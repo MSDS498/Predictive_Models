@@ -1,0 +1,206 @@
+library(ggplot2)
+library(dplyr)
+library(sqldf)
+library(dbplyr)
+library(lubridate)
+library(purrr)
+library(maps)
+library(readr)
+library(Rtsne)
+library(cluster)
+library(factoextra)
+library(caret)
+library(e1071)
+library(randomForest)
+
+base_data=read.csv("C:/Users/kmalhotra/Desktop/Course/MSDS-498/brazilian-ecommerce/Complete_dataset_new.csv", stringsAsFactors = FALSE)
+base_data$customer_id = trimws(base_data$customer_id)
+p_data=read.csv("C:/Users/kmalhotra/Desktop/Course/MSDS-498/brazilian-ecommerce/olist_products_dataset.csv",stringsAsFactors  =FALSE)
+base_data=sqldf('select a.*,b.product_description_lenght from base_data a join p_data b on a.product_id=b.product_id')
+
+base_data$customer_city=as.factor(base_data$customer_city)
+base_data$customer_state=as.factor(base_data$customer_state)
+base_data$payment_type=as.factor(base_data$payment_type)
+base_data$product_category=as.factor(base_data$product_category)
+base_data$review_score=as.factor(base_data$review_score)
+base_data=na.omit(base_data)
+
+eda_data=base_data%>%select(-one_of("product_weight_g","product_length_cm","product_height_cm","product_width_cm",
+                                    "X","X.1"))
+
+
+eda_data$order_Purchase_date=as.Date(strptime(eda_data$order_purchase_timestamp,format='%m/%d/%Y %H:%M',tz='UTC'))
+eda_data$order_delivered_date=as.Date(strptime(eda_data$order_delivered_customer_date,format='%m/%d/%Y %H:%M',tz='UTC'))
+eda_data$order_est_delivered_date=as.Date(strptime(eda_data$order_estimated_delivery_date,format='%m/%d/%Y %H:%M',tz='UTC'))
+
+eda_data$actual_turn_around_time=difftime(eda_data$order_delivered_date,eda_data$order_Purchase_date,units="days")
+eda_data$estimated_turn_around_time=difftime(eda_data$order_est_delivered_date,eda_data$order_Purchase_date,units="days")
+
+eda_data$Delivery_status=ifelse((eda_data$actual_turn_around_time - eda_data$estimated_turn_around_time)==0,
+                                "On Time",ifelse((eda_data$actual_turn_around_time - eda_data$estimated_turn_around_time)>0,"Late","Early"))
+eda_data$Delivery_status=as.factor(eda_data$Delivery_status)
+eda_data$purchase_day_ow=as.POSIXlt(eda_data$order_Purchase_date)$wday
+
+c_data=eda_data%>%select(- one_of("review_comment_title","review_comment_message",
+                                  "review_id","seller_city","seller_id","shipping_limit_date","product_id",
+                                  "seller_zip_code_prefix","customer_zip_code_prefix","customer_city","customer_unique_id",
+                                  "product_category"))
+c_data$d_late=ifelse(c_data$Delivery_status=="Late",1,0)
+c_data$d_early=ifelse(c_data$Delivery_status=="Late" | c_data$Delivery_status=="On Time",0,1)
+c_data$freight_to_price_ratio=c_data$freight_value/c_data$price
+c_data$total_price=c_data$price+c_data$freight_value
+c_data$order_status=as.factor(c_data$order_status)
+c_data$d_late=as.factor(c_data$d_late)
+c_data$purchase_day_ow=as.factor(c_data$purchase_day_ow)
+c_data=na.omit(c_data)
+c_data$total_delivery_time=c_data$actual_turn_around_time - c_data$estimated_turn_around_time
+
+cluster_data=c_data%>%select(review_score,d_late,order_status,purchase_day_ow,product_description_lenght,total_delivery_time,total_price,freight_to_price_ratio)
+cluster_data=na.omit(cluster_data)
+cluster_data$total_delivery_time=as.integer(cluster_data$total_delivery_time)
+#cluster_data$actual_turn_around_time=as.integer(cluster_data$actual_turn_around_time)
+#cluster_data$estimated_turn_around_time=as.integer(cluster_data$estimated_turn_around_time)
+
+####Compute grower distance #######
+
+##gower_dist=daisy(cluster_data[,-1],metric="gower")
+
+
+set.seed(100)
+#preproc <- preProcess(fnl_data[4:7], method = c("range"))
+#cluster_data <- predict(preproc, fnl_data)
+clust_data=scale(cluster_data[5:8])
+
+Tot <- kmeans(clust_data, centers = 8)
+fit=kmeans(clust_data,8)
+
+fit$withinss
+#fviz_cluster(fit, cluster_data[5:8])
+cluster_data$cluster <- as.factor(fit$cluster)
+
+fviz_cluster(fit, clust_data)
+
+
+wss <- 0
+for (i in 1:10) {
+  wss[i] <- sum(kmeans(clust_data,centers=i)$withinss)
+}
+
+
+plot(1:10, wss, 
+     type="b", 
+     xlab="Number of Clusters",
+     ylab="Within groups sum of squares")
+
+#############################regression ###################################
+cluster_data$review_logistic=ifelse(cluster_data$review_score =="4" | cluster_data$review_score=="5",1,0)
+cluster_data$review_logistic=as.factor(cluster_data$review_logistic)
+
+cluster_data$status=as.factor(ifelse(cluster_data$order_status=='delivered',1,0))
+
+fnl_data=cluster_data%>%select(-one_of("review_score","order_status"))
+
+'%ni%' <- Negate('%in%')  # define 'not in' func
+options(scipen=999)  # prevents printing scientific notations.
+
+#############################Training and test samples ########################
+
+set.seed(100)
+trainDataIndex <- createDataPartition(fnl_data$review_logistic, p=0.7, list = F)  # 70% training data
+trainData <- fnl_data[trainDataIndex, ]
+testData <- fnl_data[-trainDataIndex, ]
+
+set.seed(100)
+up_train <- upSample(x = trainData[, colnames(trainData) %ni% "review_logistic"],
+                     y = trainData$review_logistic)
+colnames(up_train)[9]="review_logistic"
+
+up_train=up_train[,c(9,1,2,3,4,5,6,7,8)]
+testData=testData[,c(8,1,2,3,4,5,6,7,9)]
+
+#up_data=up_train%>%select("d_late","order_status","product_description_lenght","total_delivery_time","total_price",
+ #                         "freight_to_price_ratio","cluster","actual_turn_around_time","estimated_turn_around_time","review_logistic")
+
+#test_data=testData%>%select("d_late","order_status","product_description_lenght","total_delivery_time","total_price",
+ #                           "freight_to_price_ratio","cluster","actual_turn_around_time","estimated_turn_around_time","review_logistic")
+
+
+
+logitmod <- glm(review_logistic~d_late+status+product_description_lenght+total_delivery_time+
+                  total_price+freight_to_price_ratio+cluster+purchase_day_ow, family = "binomial", data=up_train)
+summary(logitmod)
+
+pred <- predict(logitmod, newdata = testData[,-1], type = "response")
+
+y_pred_num <- ifelse(pred > 0.5, 1, 0)
+y_pred <- factor(y_pred_num, levels=c(0, 1))
+y_act <- test_data$review_logistic
+
+mean(y_pred == y_act)
+
+#############################Training and test samples model 2 ########################
+
+
+
+testing=fnl_data
+testing$cluster_com=ifelse(testing$cluster=='2'|testing$cluster=='3'|testing$cluster=='6'|testing$cluster=='8',2,
+                           ifelse(testing$cluster =='1',1,ifelse(testing$cluster =='5',3,ifelse(testing$cluster =='7',4,0))))
+testing=testing%>%select("d_late","status","product_description_lenght","total_delivery_time","total_price",
+                         "freight_to_price_ratio","cluster_com","review_logistic","purchase_day_ow")
+testing$cluster_com=as.factor(testing$cluster_com)
+
+testing=testing[,c(8,1,2,3,4,5,6,7,9)]
+
+trainDataIndex <- createDataPartition(testing$review_logistic, p=0.7, list = F)  # 70% training data
+trainData2 <- testing[trainDataIndex, ]
+testData2<- testing[-trainDataIndex, ]
+
+set.seed(100)
+up_train2 <- upSample(x = trainData2[, colnames(trainData2) %ni% "review_logistic"],
+                      y = trainData2$review_logistic)
+colnames(up_train2)[9]="review_logistic"
+
+up_data2=up_train2%>%select("d_late","order_status","product_description_lenght","total_delivery_time","total_price",
+                            "freight_to_price_ratio","cluster_com","review_logistic")
+
+test_data2=testData2%>%select("d_late","order_status","product_description_lenght","total_delivery_time","total_price",
+                              "freight_to_price_ratio","cluster_com","review_logistic")
+
+
+
+logitmod2 <- glm(review_logistic ~ d_late+product_description_lenght+total_delivery_time+
+                   freight_to_price_ratio+status+cluster_com, family = "binomial", data=up_train2)
+summary(logitmod2)
+
+pred <- predict(logitmod2, newdata = testData2, type = "response")
+
+y_pred_num <- ifelse(pred > 0.5, 1, 0)
+y_pred <- factor(y_pred_num, levels=c(0, 1))
+y_act <- test_data2$review_logistic
+
+mean(y_pred == y_act)
+
+logit.reg.pred <- as.data.frame(predict(logitmod2, test_data2[, -8], type = "response"))
+colnames(logit.reg.pred)[1] <- "p"
+logit.reg.pred$class <- ifelse(logit.reg.pred$p>0.5,1,0)
+cm <- table(logit.reg.pred$class,test_data2$review_logistic)
+confusionMatrix(cm)
+
+########################### Random Forest #################################################3
+rf_model=randomForest(review_logistic ~.,up_train)
+
+importance(rf_model)
+varImpPlot(rf_model)
+
+
+
+##############################Selected Model -- Accuracy -- 78.75% ###############################
+rf_model1=randomForest(review_logistic ~ d_late+product_description_lenght+total_delivery_time+
+                        freight_to_price_ratio+cluster,up_train)
+varImpPlot(rf_model1)
+
+pred_rfm <-(predict(rf_model1,testData))
+pred_rfm_p <- as.data.frame(predict(rf_model1, testData[,-1], type = "prob"))
+cm_rfm <- (table(pred_rfm, testData$review_logistic))
+confusionMatrix(cm_rfm)
+getTree(rf_model1)
