@@ -5,7 +5,7 @@ library(stats)
 
 #set params
 # -------------
-setwd("C:/Users/ashle/Documents/Personal Data/Northwestern/2019-04  fall MSDS498_Sec56 Capstone/Git_repo/Predictive modeling")
+setwd("C:/Users/ashle/Documents/Personal Data/Northwestern/2019-04  fall MSDS498_Sec56 Capstone/Git_repo/Predictive_models")
 
 flnm_raw_data <- 'Merged_dataset_w_LatLong.csv'
 # -------------
@@ -195,11 +195,11 @@ boxplot(dt_raw_2$long_seller, main='Long_Seller')
   # dt_raw_2[ long_seller>-34 | long_seller < -74 ]  #0, as noted on boxplot
 
   #custs outside of expected locations
-  # dt_raw_2[ long_customer>-34 | long_seller < -74 ]  #9, as noted on boxplot
+  # dt_raw_2[ long_customer>-34 | long_customer < -74 ]  #9, as noted on boxplot
   # dt_raw_2[ lat_customer>6 | lat_customer < -34 ]  #8, as noted on boxplot
-  # dt_raw_2[ long_customer>-34 | long_seller < -74 | lat_customer>6 | lat_customer < -34 ]  #9, so the exceptional longitudes include all the exceptional latitudes
+  # dt_raw_2[ long_customer>-34 | long_customer < -74 | lat_customer>6 | lat_customer < -34 ]  #9, so the exceptional longitudes include all the exceptional latitudes
 
-dt_raw_2[ long_customer>-34 | long_seller < -74 | lat_customer>6 | lat_customer < -34 ]$distance_calcn_rough <- NaN
+dt_raw_2[ long_customer>-34 | long_customer < -74 | lat_customer>6 | lat_customer < -34 ]$distance_calcn_rough <- NaN
 hist(dt_raw_2$distance_calcn_rough)   #now it maxes out at 3500, much cleaner
 
 
@@ -207,12 +207,10 @@ hist(dt_raw_2$distance_calcn_rough)   #now it maxes out at 3500, much cleaner
 
 
 #misc
-dt_raw_2 %>% colnames()
-dt_raw_2[, .N, by=product_category_name_english]  #72 categories, with 2 to 11k order-items
-dt_raw_2[, .N, by=seller_state]  #72 categories, with 2 to 11k order-items
-
-dt_raw_2[, .N, by=seller_state]  #72 categories, with 8 to 81k order-items
-dt_raw_2[, .N, by=customer_state]  #72 categories, with 8 to 81k order-items
+#dt_raw_2 %>% colnames()
+dt_raw_2[, .N, by=product_category_name_english] %>% arrange(N)   #72 categories, with 2 to 11k order-items
+dt_raw_2[, .N, by=seller_state] %>% arrange(N)  #22 states, with SP way dominant at 81k, MG second biggest at 8.9k, ...
+dt_raw_2[, .N, by=customer_state] %>% arrange(N)  #27 states, with SP still leading but less so (48k); RJ next at 14.8k, MG at 13k, ...
 
 
 
@@ -449,13 +447,13 @@ plot(late_deliv_by_est_time$est_time_daybuckets, late_deliv_by_est_time$pct_late
 
 
 
-
-
-
 #TODO:  can we predict low sentiment / review score  as a function of ontime delivery, seller, # of photos, product, price, # of reviews, avg score on other reviews, "buy local" (same state/city seller-cust), avg score on other reviews, ...???
 #TODO:  can we look at all first time custs and compare the odds of a 2nd order for happy reviewers vs. unhappy reviewers?
 #TODO:  can we do time series analysis and see how a negative review changes trajectory????  (quantify $ value of a negative review!!)
 #TODo:  if the review answer date is after the delivery, then it seems more likely to reflect the delivery performance than predict it
+
+
+
 
 numeric_cols2 <- c(numeric_cols, 'delivery_time_carrier_to_cust')
 # numeric_cols3 <- append(numeric_cols, 'delivery_time_carrier_to_cust')
