@@ -175,7 +175,7 @@ corrplt.close()
 
 
 #plot scatterplots
-plt.figure(figsize=(20, 5))
+plt.figure(figsize=(20, 15))
 
 
 # In[23]:
