@@ -127,7 +127,7 @@ def distance_calcn_rough(start_lat, start_long, end_lat, end_long):
 
 orders_df['distance_km'] = orders_df.apply(lambda rww:  distance_calcn_rough(rww['lat_seller'], rww['long_seller'], rww['lat_customer'], rww['long_customer']), axis=1)
 #sum(pd.isnull(orders_df.distance_km))  #1267 - not as many nulls as I thought
-orders_df.info()
+#orders_df.info()
 
 
 
@@ -254,11 +254,11 @@ contnuous_vars_othr = ['ttl_pd', 'pmt_mthds_used', 'installments_used_ttl', 'pay
        
 
 #checked elsewhere
-'customer_zip_code_prefix', 'seller_zip_code_prefix'
-'nbr_sellers', 'nbr_products', 'nbr_photos', 'ttl_wt', 'ttl_length', 'ttl_height', 'ttl_width', 'nbr_rws', 'late_delivery_flag', 'approval_time_days', 'est_delivery_time_days', 'shipping_limit_missed', 'shipping_limit_miss_amt', 'days_remaining', 'distance_km', 'purchase_mo', 'purchase_yr_and_mo', 'purchase_yr_and_mo2',
-       'purchase_day_of_wk', 'states_same_or_diff'
-       'avg_score', 
-orders_train.info()
+#'customer_zip_code_prefix', 'seller_zip_code_prefix'
+#'nbr_sellers', 'nbr_products', 'nbr_photos', 'ttl_wt', 'ttl_length', 'ttl_height', 'ttl_width', 'nbr_rws', 'late_delivery_flag', 'approval_time_days', 'est_delivery_time_days', 'shipping_limit_missed', 'shipping_limit_miss_amt', 'days_remaining', 'distance_km', 'purchase_mo', 'purchase_yr_and_mo', 'purchase_yr_and_mo2',
+#       'purchase_day_of_wk', 'states_same_or_diff'
+#       'avg_score', 
+#orders_train.info()
 
 for var in contnuous_vars:
     fig1, ax1 = plt.subplots(figsize=(16,9))
@@ -319,7 +319,11 @@ for var in contnuous_vars_othr:
     plt.title(var)
     ax1.set_title(var)
     plt.xlabel(var)
-    
+    file_nm = './output/Classifier_EDA_scatter_odds_by' + var + '.jpg'
+    plt.savefig(file_nm, 
+        bbox_inches = 'tight', dpi=None, facecolor='w', edgecolor='b', 
+        orientation='portrait', papertype=None, format=None, 
+        transparent=True, pad_inches=0.25, frameon=None)  
 #'ttl_pd', 
 
 #    'ttl_price', 'ttl_freight' also show positive correlation but presumably this is not diff enough to put them in, just put in ttl_pd???
@@ -420,6 +424,11 @@ for var in [vrbl for vrbl in catgrcl_vars if vrbl not in ['customer_city', 'sell
     df_plt.plot.bar(x='ctgry_lvl', y='odds', ax=ax1, rot=90)
     plt.title(var)
     ax1.set_title(var)
+    file_nm = './output/Classifier_EDA_bar_odds_by' + var + '.jpg'
+    plt.savefig(file_nm, 
+        bbox_inches = 'tight', dpi=None, facecolor='w', edgecolor='b', 
+        orientation='portrait', papertype=None, format=None, 
+        transparent=True, pad_inches=0.25, frameon=None)  
     
 
 #review the results for variables, and levels thereof, that seem to have predictive value
@@ -538,14 +547,54 @@ for var in ['customer_city', 'seller_city', 'customer_zip_code_prefix', 'seller_
     plt.title(var)
     ax1.set_title(var)
     impactful_hi_card_fields = impactful_hi_card_fields.append(df_plt[ ( df_plt.odds > pct_late_upper_threshold )  |  ( df_plt.odds < pct_late_lower_threshold ) ].copy() )
+    file_nm = './output/Classifier_EDA_hist_odds_by' + var + '.jpg'
+    plt.savefig(file_nm, 
+        bbox_inches = 'tight', dpi=None, facecolor='w', edgecolor='b', 
+        orientation='portrait', papertype=None, format=None, 
+        transparent=True, pad_inches=0.25, frameon=None)  
 
-impactful_hi_card_fields['major_impact_flag']
+
 impactful_hi_card_fields['major_impact_flag'] = ( (impactful_hi_card_fields.odds > pct_late_upper_threshold2 )  |  ( impactful_hi_card_fields.odds < pct_late_lower_threshold2 ) ).astype(int)
 
 sum(impactful_hi_card_fields.major_impact_flag)  #281 with "major" impact - start with those so we don't overspecify the model
+impactful_hi_card_fields['major_impact_flag']
 
 
-df_odds_by_var_and_lvl = df_odds_by_var_and_lvl.sort_values(by=['odds'], ascending=False)
+
+
+ohe_biggest_vars = impactful_lvls3[ (impactful_lvls3.odds > pct_late_upper_threshold2 )  |  ( impactful_lvls3.odds < pct_late_lower_threshold2 ) ]
+hi_card_major_predictors = impactful_hi_card_fields[ impactful_hi_card_fields.major_impact_flag == 1 ]
+ohe_biggest_vars = ohe_biggest_vars.append( hi_card_major_predictors )
+
+
+#drill down to the most impactful levels, and lump everything else into the "all others" bucket
+for var in pd.unique(ohe_biggest_vars.variabl):
+
+    df_plt = ohe_biggest_vars.loc[ohe_biggest_vars.variabl==var, ['variabl', 'ctgry_lvl_str', 'odds', 'nbr', 'nbr_late']]
+    key_lvls = list(pd.unique(df_plt.ctgry_lvl_str))
+    
+    all_othrs_df =  df_odds_by_var_and_lvl[ (df_odds_by_var_and_lvl.variabl==var) & 
+                                                ( ~ df_odds_by_var_and_lvl.ctgry_lvl_str.isin(key_lvls) ) ]
+    nbr_othrs = sum(all_othrs_df.nbr)
+    nbr_late_othrs = sum(all_othrs_df.nbr_late)
+    odds_othrs = nbr_late_othrs/nbr_othrs                                                
+
+    new_rww = pd.DataFrame([{'variabl':var, 'ctgry_lvl_str':'_All others', 'odds':odds_othrs, 'nbr':nbr_othrs, 'nbr_late':nbr_late_othrs}])                                          
+    df_plt = df_plt.append(new_rww)
+    df_plt = df_plt.sort_values(by=['ctgry_lvl_str'])
+    fig1, ax1 = plt.subplots()
+    df_plt.plot.bar(x='ctgry_lvl_str', y='odds', ax=ax1, rot=-90)
+    plt.title('Percent late by ' + var)
+    ax1.set_title(var)
+    file_nm = './output/Classifier_EDA_bar_odds_by_OHE_var__' + var + '.jpg'
+    plt.savefig(file_nm, 
+        bbox_inches = 'tight', dpi=None, facecolor='w', edgecolor='b', 
+        orientation='portrait', papertype=None, format=None, 
+        transparent=True, pad_inches=0.25, frameon=None)  
+
+
+
+#df_odds_by_var_and_lvl = df_odds_by_var_and_lvl.sort_values(by=['odds'], ascending=False)
 #customer zip code has a big outlier
     #the rest of the metrics are more normal shaped-  some right skew but not too much
 bad_cust_zips = df_odds_by_var_and_lvl.loc[ (df_odds_by_var_and_lvl.variabl=='customer_zip_code_prefix') & (df_odds_by_var_and_lvl.nbr >= 10) , ]
@@ -684,65 +733,63 @@ len(predictor_cols_ohe)  #298
 
 
 
-# Create models on training
-# Validate on test set
 
-mdl_lr = LogisticRegression(random_state = RANDOM_SEED, C=1)
-
-#fit the model
-mdl_lr.fit(x_train, y_train)
-
-#score it on the test dataset
-mdl_lr.score(x_test, y_test)
-#0.9298   
-
-#get the predicted late flags as per the model
-y_predicted_lr = mdl_lr.predict(x_test)
-
-
-#calculate precision-recall score (avg?), curves
-precision_lr, recall_lr, _ = precision_recall_curve(y_test, y_predicted_lr)
-
-average_precision_lr = average_precision_score(y_test, y_predicted_lr)
-print('Average precision-recall score: {0:0.2f}'.format(average_precision_lr))
-#0.12   #  :(
-
-#plot precision/recall curve
-# ----------------------------
-# In matplotlib < 1.5, plt.fill_between does not have a 'step' argument
-step_kwargs = ( {'step': 'post'} if 'step' in signature(plt.fill_between).parameters else {} )
-
-plt.xlabel('Recall')
-plt.ylabel('Precision')
-plt.ylim([0.0, 1.05])
-plt.xlim([0.0, 1.0])
-plt.title('Precision-Recall curve:  Logistic Regression.   AP={0:0.2f}'.format(average_precision_lr))
-plt.step(recall_lr, precision_lr, color='b', alpha=0.2, where='post')
-plt.fill_between(recall_lr, precision_lr, alpha=0.2, color='b', **step_kwargs)
-
-
-# look at the confusion matrix
-# ----------------------------
-#type(y_test)  #df
-actl_and_predicted = y_test.copy()
-actl_and_predicted['predicted_late_flag'] = y_predicted_lr
-actl_and_predicted.columns = ['actual_late_flag', 'predicted_late_flag']
-
-actl_and_predicted.groupby(['actual_late_flag', 'predicted_late_flag']).agg(cnt=('actual_late_flag', 'count')).reset_index()
-#   actual_late_flag  predicted_late_flag    cnt
-#                 0                    0  22021
-#                 0                    1     26
-#                 1                    0   1502
-#                 1                    1    111
-
-
-
-#withOUT ship_limit_miss_amt, the model is lot worse:
-#   actual_late_flag  predicted_late_flag    cnt
-#                 0                    0  21982
-#                 0                    1     23
-#                 1                    0   1637
-#                 1                    1     18
+#mdl_lr = LogisticRegression(random_state = RANDOM_SEED, C=1)
+#
+##fit the model
+#mdl_lr.fit(x_train, y_train)
+#
+##score it on the test dataset
+#mdl_lr.score(x_test, y_test)
+##0.9298   
+#
+##get the predicted late flags as per the model
+#y_predicted_lr = mdl_lr.predict(x_test)
+#
+#
+##calculate precision-recall score (avg?), curves
+#precision_lr, recall_lr, _ = precision_recall_curve(y_test, y_predicted_lr)
+#
+#average_precision_lr = average_precision_score(y_test, y_predicted_lr)
+#print('Average precision-recall score: {0:0.2f}'.format(average_precision_lr))
+##0.12   #  :(
+#
+##plot precision/recall curve
+## ----------------------------
+## In matplotlib < 1.5, plt.fill_between does not have a 'step' argument
+#step_kwargs = ( {'step': 'post'} if 'step' in signature(plt.fill_between).parameters else {} )
+#
+#plt.xlabel('Recall')
+#plt.ylabel('Precision')
+#plt.ylim([0.0, 1.05])
+#plt.xlim([0.0, 1.0])
+#plt.title('Precision-Recall curve:  Logistic Regression.   AP={0:0.2f}'.format(average_precision_lr))
+#plt.step(recall_lr, precision_lr, color='b', alpha=0.2, where='post')
+#plt.fill_between(recall_lr, precision_lr, alpha=0.2, color='b', **step_kwargs)
+#
+#
+## look at the confusion matrix
+## ----------------------------
+##type(y_test)  #df
+#actl_and_predicted = y_test.copy()
+#actl_and_predicted['predicted_late_flag'] = y_predicted_lr
+#actl_and_predicted.columns = ['actual_late_flag', 'predicted_late_flag']
+#
+#actl_and_predicted.groupby(['actual_late_flag', 'predicted_late_flag']).agg(cnt=('actual_late_flag', 'count')).reset_index()
+##   actual_late_flag  predicted_late_flag    cnt
+##                 0                    0  22021
+##                 0                    1     26
+##                 1                    0   1502
+##                 1                    1    111
+#
+#
+#
+##withOUT ship_limit_miss_amt, the model is lot worse:
+##   actual_late_flag  predicted_late_flag    cnt
+##                 0                    0  21982
+##                 0                    1     23
+##                 1                    0   1637
+##                 1                    1     18
 
 
 

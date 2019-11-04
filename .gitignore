@@ -6,5 +6,6 @@ archives/
 Final_cleaned102419.csv
 Merged_dataset_w_LatLong_rs_durationV4.csv
 
+output/
 
 .ipynb_checkpoints/*
