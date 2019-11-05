@@ -24,10 +24,11 @@ pd.set_option('display.max_columns', 65)
 pd.set_option('display.max_rows', 20) 
 pd.set_option('display.width', 160)
 
-wkg_dir = 'C:/Users/ashle/Documents/Personal Data/Northwestern/2019-04  fall MSDS498_Sec56 Capstone/final dataset/'
+inpt_fldr = 'C:/Users/ashle/Documents/Personal Data/Northwestern/2019-04  fall MSDS498_Sec56 Capstone/final dataset/'
+outpt_fldr = 'C:/Users/ashle/Documents/Personal Data/Northwestern/2019-04  fall MSDS498_Sec56 Capstone/Git_repo/Predictive_models/'
 
 
-orders_df = pd.read_csv(wkg_dir+'Order_level_dataset.csv')
+orders_df = pd.read_csv(inpt_fldr+'Order_level_dataset.csv')
 orders_df.head()
 orders_df.info()
 orders_df.order_estimated_delivery_date = pd.to_datetime(orders_df.order_estimated_delivery_date)  
@@ -288,9 +289,9 @@ for var in contnuous_vars:
 #find the breakpoints for 2nd, 4th, 6th, ...100th percentile
 #calculate the odds in each bucket
 # scatterplot them, using midpoint of range for X, odds for Y    
-for var in contnuous_vars_othr:
-#for var in contnuous_vars:
-#    var = 'shipping_limit_miss_amt'
+#for var in contnuous_vars_othr:
+for var in contnuous_vars:
+    #var = 'shipping_limit_miss_amt'
     if var == 'shipping_limit_miss_amt':
         df_new = orders_train.loc[orders_train.shipping_limit_miss_amt > -60, [var, 'late_delivery_flag']]
     else:
@@ -319,7 +320,9 @@ for var in contnuous_vars_othr:
     plt.title(var)
     ax1.set_title(var)
     plt.xlabel(var)
-    file_nm = './output/Classifier_EDA_scatter_odds_by' + var + '.jpg'
+    file_nm = outpt_fldr+'output/Classifier_EDA_scatter_odds_by' + var + '.jpg'
+#    if var == 'shipping_limit_miss_amt':
+#        file_nm = outpt_fldr+'output/Classifier_EDA_scatter_odds_bySLMA.jpg'
     plt.savefig(file_nm, 
         bbox_inches = 'tight', dpi=None, facecolor='w', edgecolor='b', 
         orientation='portrait', papertype=None, format=None, 
@@ -424,7 +427,7 @@ for var in [vrbl for vrbl in catgrcl_vars if vrbl not in ['customer_city', 'sell
     df_plt.plot.bar(x='ctgry_lvl', y='odds', ax=ax1, rot=90)
     plt.title(var)
     ax1.set_title(var)
-    file_nm = './output/Classifier_EDA_bar_odds_by' + var + '.jpg'
+    file_nm = outpt_fldr+'output/Classifier_EDA_bar_odds_by' + var + '.jpg'
     plt.savefig(file_nm, 
         bbox_inches = 'tight', dpi=None, facecolor='w', edgecolor='b', 
         orientation='portrait', papertype=None, format=None, 
@@ -547,7 +550,7 @@ for var in ['customer_city', 'seller_city', 'customer_zip_code_prefix', 'seller_
     plt.title(var)
     ax1.set_title(var)
     impactful_hi_card_fields = impactful_hi_card_fields.append(df_plt[ ( df_plt.odds > pct_late_upper_threshold )  |  ( df_plt.odds < pct_late_lower_threshold ) ].copy() )
-    file_nm = './output/Classifier_EDA_hist_odds_by' + var + '.jpg'
+    file_nm = outpt_fldr+'output/Classifier_EDA_hist_odds_by' + var + '.jpg'
     plt.savefig(file_nm, 
         bbox_inches = 'tight', dpi=None, facecolor='w', edgecolor='b', 
         orientation='portrait', papertype=None, format=None, 
@@ -557,7 +560,6 @@ for var in ['customer_city', 'seller_city', 'customer_zip_code_prefix', 'seller_
 impactful_hi_card_fields['major_impact_flag'] = ( (impactful_hi_card_fields.odds > pct_late_upper_threshold2 )  |  ( impactful_hi_card_fields.odds < pct_late_lower_threshold2 ) ).astype(int)
 
 sum(impactful_hi_card_fields.major_impact_flag)  #281 with "major" impact - start with those so we don't overspecify the model
-impactful_hi_card_fields['major_impact_flag']
 
 
 
@@ -586,7 +588,7 @@ for var in pd.unique(ohe_biggest_vars.variabl):
     df_plt.plot.bar(x='ctgry_lvl_str', y='odds', ax=ax1, rot=-90)
     plt.title('Percent late by ' + var)
     ax1.set_title(var)
-    file_nm = './output/Classifier_EDA_bar_odds_by_OHE_var__' + var + '.jpg'
+    file_nm = outpt_fldr+'output/Classifier_EDA_bar_odds_by_OHE_var__' + var + '.jpg'
     plt.savefig(file_nm, 
         bbox_inches = 'tight', dpi=None, facecolor='w', edgecolor='b', 
         orientation='portrait', papertype=None, format=None, 
@@ -652,9 +654,9 @@ bad_cust_zips = df_odds_by_var_and_lvl.loc[ (df_odds_by_var_and_lvl.variabl=='cu
 predictor_cols_basic = ['est_delivery_time_days', 'shipping_limit_missed', 'shipping_limit_miss_amt', 'days_remaining', 'distance_km', 'approval_time_days', 'nbr_items',
                   'nbr_sellers', 'nbr_products', 'ttl_pd', 'ttl_wt', 'ttl_length', 'ttl_height', 'ttl_width', 'states_same_or_diff']
 
-ohe_biggest_vars = impactful_lvls3[ (impactful_lvls3.odds > pct_late_upper_threshold2 )  |  ( impactful_lvls3.odds < pct_late_lower_threshold2 ) ]
-hi_card_major_predictors = impactful_hi_card_fields[ impactful_hi_card_fields.major_impact_flag == 1 ]
-ohe_biggest_vars = ohe_biggest_vars.append( hi_card_major_predictors )
+#ohe_biggest_vars = impactful_lvls3[ (impactful_lvls3.odds > pct_late_upper_threshold2 )  |  ( impactful_lvls3.odds < pct_late_lower_threshold2 ) ]
+#hi_card_major_predictors = impactful_hi_card_fields[ impactful_hi_card_fields.major_impact_flag == 1 ]
+#ohe_biggest_vars = ohe_biggest_vars.append( hi_card_major_predictors )
 
 
 x_train = orders_train.copy()
@@ -875,7 +877,7 @@ plt.plot(fpr_rf1, tpr_rf1, lw=2, label='ROC curve for Random Forest model (area 
 plt.plot([0,1],[0,1],color='grey', linestyle='--', lw=1)
 plt.legend(loc="lower right", frameon = False)
 plt.title('ROC curve - Random Forest model')
-plt.savefig(wkg_dir + '/ROC_rf1.jpg', 
+plt.savefig(outpt_fldr + '/ROC_rf1.jpg', 
     bbox_inches = 'tight', dpi=None, facecolor='w', edgecolor='b', 
     orientation='portrait', papertype=None, format=None, 
     transparent=True, pad_inches=0.25, frameon=None)  
@@ -986,7 +988,7 @@ plt.xlim([0.0, 1.0])
 plt.title('Precision-Recall: Random Forest w Undersampling.   AP={0:0.2f}'.format(average_precision_rf_us))
 plt.step(recall_rf_us, precision_rf_us, color='b', alpha=0.2, where='post')
 plt.fill_between(recall_rf_us, precision_rf_us, alpha=0.2, color='b', **step_kwargs)
-plt.savefig(wkg_dir + '/precision_recall_rf_us.jpg', 
+plt.savefig(outpt_fldr + '/precision_recall_rf_us.jpg', 
     bbox_inches = 'tight', dpi=None, facecolor='w', edgecolor='b', 
     orientation='portrait', papertype=None, format=None, 
     transparent=True, pad_inches=0.25, frameon=None)  
@@ -1004,7 +1006,7 @@ plt.plot(fpr_rf_us, tpr_rf_us, lw=2, label='ROC curve for Random Forest model (a
 plt.plot([0,1],[0,1],color='grey', linestyle='--', lw=1)
 plt.legend(loc="lower right", frameon = False)
 plt.title('ROC curve - Random Forest model')
-plt.savefig(wkg_dir + '/ROC_rf_us.jpg', 
+plt.savefig(outpt_fldr + '/ROC_rf_us.jpg', 
     bbox_inches = 'tight', dpi=None, facecolor='w', edgecolor='b', 
     orientation='portrait', papertype=None, format=None, 
     transparent=True, pad_inches=0.25, frameon=None)  
@@ -1105,7 +1107,7 @@ plt.plot(fpr_rf, tpr_rf, lw=2, label='ROC curve for Random Forest model (area = 
 plt.plot([0,1],[0,1],color='grey', linestyle='--', lw=1)
 plt.legend(loc="lower right", frameon = False)
 plt.title('ROC curve - Random Forest model')
-plt.savefig(wkg_dir + '/ROC_rf.jpg', 
+plt.savefig(outpt_fldr + '/ROC_rf.jpg', 
     bbox_inches = 'tight', dpi=None, facecolor='w', edgecolor='b', 
     orientation='portrait', papertype=None, format=None, 
     transparent=True, pad_inches=0.25, frameon=None)  
