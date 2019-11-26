@@ -45,12 +45,13 @@ orders_df.latest_review_dt = pd.to_datetime(orders_df.latest_review_dt)
 
 #, format='%Y-%m-%d %H:%M:S')
 #dt_cols <- c('order_purchase_timestamp', 'order_approved_at', 'order_delivered_carrier_date', 'order_delivered_customer_date', 'order_estimated_delivery_date', 'shipping_limit_date')
-#ship_limit_initial, ship_limit_final
-#earliest_review_dt, latest_review_dt
+#ship_limit_initial, ship_limit_final, earliest_review_dt, latest_review_dt
+
 
 
 #Goal:   classifier model for "will we miss our estimated date" y/n, with prediction made after the earlier of:  max(shipping_limit_date) of any item 
 #                                         or delivery to carrier has occurred  -->  at this point, we know if shiping limit has been missed or not (is known, can be used as a predictor).
+
 
 #Features that are likely to be important:
 # approval time > 1 day
@@ -77,7 +78,6 @@ orders_df['est_delivery_time_days'] = np.ceil(orders_df['est_delivery_time_days'
 
 # shipping limit missed
 orders_df['shipping_limit_missed'] = (orders_df.order_delivered_carrier_date > orders_df.ship_limit_final).astype(int)
-
 orders_df['shipping_limit_miss_amt'] = (orders_df.order_delivered_carrier_date - orders_df.ship_limit_final).dt.total_seconds()/86400
 
 
@@ -157,6 +157,8 @@ orders_df2 = orders_df.loc[ ( pd.notnull(orders_df.order_delivered_customer_date
                             ( pd.notnull(orders_df.order_estimated_delivery_date) ) & ( pd.notnull(orders_df.ship_limit_final) ) &
                             ( pd.notnull(orders_df.nbr_items) ) & ( pd.notnull(orders_df.est_delivery_time_days) ) &
                             ( pd.notnull(orders_df.shipping_limit_missed) ) & ( pd.notnull(orders_df.shipping_limit_miss_amt) ) ]
+
+
 
 #check the # null in the subset we care about (delivered orders)
 #for col in orders_df.columns:
@@ -283,9 +285,11 @@ for var in contnuous_vars:
 #the histogram isn't really working for me.  the scatter plot below is much clearer
     
     
+orders_train.loc[orders_train.shipping_limit_miss_amt <= -60]
+
 
 #try an plot of odds by percentile bucket
-#rank the records by the desired dimension
+#rank the orders by the desired dimension
 #find the breakpoints for 2nd, 4th, 6th, ...100th percentile
 #calculate the odds in each bucket
 # scatterplot them, using midpoint of range for X, odds for Y    
@@ -294,6 +298,7 @@ for var in contnuous_vars:
     #var = 'shipping_limit_miss_amt'
     if var == 'shipping_limit_miss_amt':
         df_new = orders_train.loc[orders_train.shipping_limit_miss_amt > -60, [var, 'late_delivery_flag']]
+        #trim the 3 pts that are ridiculously early outliers (delivered to carrier ~1000 days before due???) so as not to distort the plot
     else:
         df_new = orders_train[[var, 'late_delivery_flag']]
 
@@ -472,7 +477,7 @@ for var in [vrbl for vrbl in catgrcl_vars if vrbl not in ['customer_city', 'sell
 
 
 
-#global avg % late
+#get the global avg % late, to use as a benchmark for when the %late for a factor/level in a category is abnormally high or low
 len(orders_train[orders_train.late_delivery_flag == 1])  #6535 in the entire set, 4913 in the training set
 len(orders_train)  #99441 in the entire set, 71,986 in the training set
 #pct_late_avg = 6535/99441  #6.57%
@@ -558,9 +563,7 @@ for var in ['customer_city', 'seller_city', 'customer_zip_code_prefix', 'seller_
 
 
 impactful_hi_card_fields['major_impact_flag'] = ( (impactful_hi_card_fields.odds > pct_late_upper_threshold2 )  |  ( impactful_hi_card_fields.odds < pct_late_lower_threshold2 ) ).astype(int)
-
-sum(impactful_hi_card_fields.major_impact_flag)  #281 with "major" impact - start with those so we don't overspecify the model
-
+#sum(impactful_hi_card_fields.major_impact_flag)  #281 with "major" impact - start with those so we don't overspecify the model
 
 
 
@@ -569,7 +572,7 @@ hi_card_major_predictors = impactful_hi_card_fields[ impactful_hi_card_fields.ma
 ohe_biggest_vars = ohe_biggest_vars.append( hi_card_major_predictors )
 
 
-#drill down to the most impactful levels, and lump everything else into the "all others" bucket
+#pslit orders into the most impactful levels (with decent size) and a single "all others" bucket, and look at the %late by those buckets 
 for var in pd.unique(ohe_biggest_vars.variabl):
 
     df_plt = ohe_biggest_vars.loc[ohe_biggest_vars.variabl==var, ['variabl', 'ctgry_lvl_str', 'odds', 'nbr', 'nbr_late']]
@@ -675,6 +678,7 @@ for rww in ohe_biggest_vars.itertuples(index=False):
 
 
 
+
 #create similar columns in the test set
 x_test = orders_test.copy()
 
@@ -689,11 +693,12 @@ for rww in ohe_biggest_vars.itertuples(index=False):
     x_test = pd.concat([x_test, df_new], axis='columns')
     
 
-len(predictor_cols_ohe)  #298
+#len(predictor_cols_ohe)  #298
 
 
 
-
+predictor_cols_long = predictor_cols_basic + predictor_cols_ohe
+#len(predictor_cols_long)  #313
 
 #'seller_city', 'seller_state', 'product_ctgry_mfu', 
 #two seller states that are notably worse    AM  (but only 3 orders; missed 1 out of 3), MA (only 392 ttl, still very samll)    
@@ -735,96 +740,218 @@ len(predictor_cols_ohe)  #298
 
 
 
+# handle nulls
+# -----------
+for col in predictor_cols_long:
+    nbr_nulls_train = sum(pd.isnull(x_train[col]))
+    nbr_nulls_test = sum(pd.isnull(x_test[col]))
+    if (nbr_nulls_train + nbr_nulls_test) > 0:
+        #impute to the mean
+        imputed_val = x_train[col].mean()
+        x_train.loc[pd.isnull(x_train[col]), col] = imputed_val
+        x_test.loc[pd.isnull(x_test[col]), col] = imputed_val
+        print(f'{col}:  {nbr_nulls_train} records in the training set and {nbr_nulls_test} in the test set were imputed to be {imputed_val}')
 
-#mdl_lr = LogisticRegression(random_state = RANDOM_SEED, C=1)
+
+# handle outliers
+# 1. DROP funky ship limit miss amt    not sure if delivery to carrier is messed up, or shipping limit final, but there's only 4 of them so drop and move on
+#x_train_bkup = x_train.copy()
+
+x_train = x_train.drop( x_train.loc[x_train.shipping_limit_miss_amt < -60].index, axis='index')
+#x_train_bkup.info()  #71,986
+#x_train.info()  #71,983
+
+#repeat for test, y_train, and y_test
+y_train = y_train.loc[x_train.index, :]
+
+x_test = x_test[x_test.shipping_limit_miss_amt >= -60]
+y_test = y_test.loc[x_test.index, :]
+
+
+#2.  DROP funky distance_km (from mapping, pretty sure these are on islands way far away)
+x_train.loc[x_train.distance_km > 3400, 'distance_km'].sort_values()   #seems pretty smooth until 3400, then big gap to ~4800 with 6 records 4800-8700
+x_test.loc[x_test.distance_km > 3400, 'distance_km'].sort_values()   #1 record at 5346.   
+
+x_train = x_train[x_train.distance_km < 3400]
+y_train = y_train.loc[x_train.index, :]
+
+x_test = x_test[x_test.distance_km < 3400]
+y_test = y_test.loc[x_test.index, :]
+
+
+#check these
+x_train.loc[x_train.approval_time_days > 2.75, 'approval_time_days'].sort_values()   #the ~98th percentile and up has 1992 records, ranging from 2 - 30, with only the last 3 being over 13
+x_train.loc[x_train.days_remaining > 40, 'days_remaining'].sort_values()    #the ~98th percentile and up has 1992 records, ranging from 40 - 148, with only the last 2 being over 92
+
+x_train.loc[x_train.est_delivery_time_days > 80, 'est_delivery_time_days'].sort_values()
+x_train.loc[:, 'est_delivery_time_days'].describe()
+x_train.loc[:, 'est_delivery_time_days'].hist()
+np.log(x_train.loc[:, 'est_delivery_time_days']).hist()
+# not a clear pattern here, and the long tail doesn't seem to have many or even any really obviously wrong or inapplicable values.
+#   so not going to do anything
+
+
+
+
+
+# scale the vars, so they are in similar ranges.  will be important for logistic regression and neural nets
+x_train_XF = x_train.copy()
+x_test_XF = x_test.copy()
+
+cols_transformed = predictor_cols_basic.copy()
+cols_transformed.remove('states_same_or_diff')    #skip scaling for binary 0/1 vars
+cols_transformed.remove('shipping_limit_missed')   #skip scaling for binary 0/1 vars
+
+transform_df = pd.DataFrame(cols_transformed, columns = ['variabl'])
+transform_df['mean'] = 0
+transform_df['std'] = 0
+
+for col in cols_transformed:
+    mean_val = x_train[col].mean()
+    std_val = x_train[col].std()
+    x_train_XF[col] = (x_train[col] - mean_val)/std_val    
+    x_test_XF[col] = (x_test[col] - mean_val)/std_val    
+    transform_df.loc[transform_df.variabl == col, 'mean'] = mean_val
+    transform_df.loc[transform_df.variabl == col, 'std'] = std_val
+    mean_str = '{:.2f}'.format(mean_val)
+    std_str = '{:.2f}'.format(std_val)
+    print(f'{col} was centered to the mean ({mean_str}) and scaled to the st dev ({std_str})')
+
+# x_train_XF[cols_transformed].describe()
+# help('FORMATTING')
+
+
+
+
+
+    
+# --------------------------------------------
+#   try a logistic regression
+# --------------------------------------------
+mdl_lr = LogisticRegression(random_state = RANDOM_SEED, C=1)
+
+#fit the model
+mdl_lr.fit(x_train_XF[predictor_cols_basic], y_train)
+
+#score it on the training dataset
+mdl_lr.score(x_train_XF[predictor_cols_basic], y_train)
+#0.9351
+
+#score it on the test dataset
+mdl_lr.score(x_test_XF[predictor_cols_basic], y_test)
+#0.9377  -- it actaully went up from training to test - good sign we're not overfitting
+
+
+  
+#get the predicted late flags as per the model
+y_predicted_lr1 = mdl_lr.predict(x_test_XF[predictor_cols_basic])
+
+
+#calculate precision-recall score (avg?), curves
+precision_lr1, recall_lr1, _ = precision_recall_curve(y_test, y_predicted_lr1)
+
+average_precision_lr1 = average_precision_score(y_test, y_predicted_lr1)
+print('Average precision-recall score: {0:0.2f}'.format(average_precision_lr1))
+#0.12   #  :(
+
+#plot precision/recall curve
+# ----------------------------
+# In matplotlib < 1.5, plt.fill_between does not have a 'step' argument
+step_kwargs = ( {'step': 'post'} if 'step' in signature(plt.fill_between).parameters else {} )
+
+plt.xlabel('Recall')
+plt.ylabel('Precision')
+plt.ylim([0.0, 1.05])
+plt.xlim([0.0, 1.0])
+plt.title('Precision-Recall curve:  Logistic Regression.   AP={0:0.2f}'.format(average_precision_lr1))
+plt.step(recall_lr1, precision_lr1, color='b', alpha=0.2, where='post')
+plt.fill_between(recall_lr1, precision_lr1, alpha=0.2, color='b', **step_kwargs)
+
+
+# look at the confusion matrix
+# ----------------------------
+#type(y_test)  #df
+actl_and_predicted_lr1 = y_test.copy()
+actl_and_predicted_lr1['predicted_late_flag'] = y_predicted_lr1
+actl_and_predicted_lr1.columns = ['actual_late_flag', 'predicted_late_flag']
+
+actl_and_predicted_lr1.groupby(['actual_late_flag', 'predicted_late_flag']).agg(cnt=('actual_late_flag', 'count')).reset_index()
+#   actual_late_flag  predicted_late_flag    cnt
+#                 0                    0  22392
+#                 0                    1     25
+#                 1                    0   1468
+#                 1                    1    109
+
+#withOUT ship_limit_miss_amt, the model is lot worse:
+
+
+
+# ------------------------------------------------------------------------------------
+#   try a logistic regression w/ more explanatory variables (the OHE categorical vars)
+# ------------------------------------------------------------------------------------
+
+mdl_lr2 = LogisticRegression(random_state = RANDOM_SEED, C=1)
+
+#fit the model
+mdl_lr2.fit(x_train_XF[predictor_cols_long], y_train)
+
+#score it on the training dataset
+mdl_lr2.score(x_train_XF[predictor_cols_long], y_train)
+#0.9349
+
+#score it on the test dataset
+mdl_lr2.score(x_test_XF[predictor_cols_long], y_test)
+#0.9380  -- still up from training to test - good sign we're not overfitting
+
+
+#get the predicted late flags as per the model;   look at the confusion matrix
+# ----------------------------------------------------------------------------
+y_predicted_lr2 = mdl_lr2.predict(x_test_XF[predictor_cols_long])
+actl_and_predicted_lr2 = y_test.copy()
+actl_and_predicted_lr2['predicted_late_flag'] = y_predicted_lr2
+actl_and_predicted_lr2.columns = ['actual_late_flag', 'predicted_late_flag']
+
+actl_and_predicted_lr2.groupby(['actual_late_flag', 'predicted_late_flag']).agg(cnt=('actual_late_flag', 'count')).reset_index()
+#   actual_late_flag  predicted_late_flag    cnt
+#                 0                    0  22361
+#                 0                    1     56
+#                 1                    0   1432
+#                 1                    1    145
+
+#(22361+145)/(22361+56+1432+145)  # 0.937984496124031, same as "score"  - pretty sure this is the logic the "score" function is doing
 #
-##fit the model
-#mdl_lr.fit(x_train, y_train)
-#
-##score it on the test dataset
-#mdl_lr.score(x_test, y_test)
-##0.9298   
-#
-##get the predicted late flags as per the model
-#y_predicted_lr = mdl_lr.predict(x_test)
-#
-#
-##calculate precision-recall score (avg?), curves
-#precision_lr, recall_lr, _ = precision_recall_curve(y_test, y_predicted_lr)
-#
-#average_precision_lr = average_precision_score(y_test, y_predicted_lr)
-#print('Average precision-recall score: {0:0.2f}'.format(average_precision_lr))
-##0.12   #  :(
-#
-##plot precision/recall curve
-## ----------------------------
-## In matplotlib < 1.5, plt.fill_between does not have a 'step' argument
-#step_kwargs = ( {'step': 'post'} if 'step' in signature(plt.fill_between).parameters else {} )
-#
-#plt.xlabel('Recall')
-#plt.ylabel('Precision')
-#plt.ylim([0.0, 1.05])
-#plt.xlim([0.0, 1.0])
-#plt.title('Precision-Recall curve:  Logistic Regression.   AP={0:0.2f}'.format(average_precision_lr))
-#plt.step(recall_lr, precision_lr, color='b', alpha=0.2, where='post')
-#plt.fill_between(recall_lr, precision_lr, alpha=0.2, color='b', **step_kwargs)
-#
-#
-## look at the confusion matrix
-## ----------------------------
-##type(y_test)  #df
-#actl_and_predicted = y_test.copy()
-#actl_and_predicted['predicted_late_flag'] = y_predicted_lr
-#actl_and_predicted.columns = ['actual_late_flag', 'predicted_late_flag']
-#
-#actl_and_predicted.groupby(['actual_late_flag', 'predicted_late_flag']).agg(cnt=('actual_late_flag', 'count')).reset_index()
-##   actual_late_flag  predicted_late_flag    cnt
-##                 0                    0  22021
-##                 0                    1     26
-##                 1                    0   1502
-##                 1                    1    111
-#
-#
-#
-##withOUT ship_limit_miss_amt, the model is lot worse:
-##   actual_late_flag  predicted_late_flag    cnt
-##                 0                    0  21982
-##                 0                    1     23
-##                 1                    0   1637
-##                 1                    1     18
+#(22361+56)/(22361+56+1432+145)  # 0.9342  -- this is the benchmark from a "no info, just guess it's on time" model
+    # some value as presumably late orders rescued are worth a lot more than the cost of "ontime orders intervened with unnecessarily"
+
 
 
 
 # --------------------------------------------
 #   try a random forest classifier
 # --------------------------------------------
-x_train_pc1 = x_train.loc[pd.notnull(x_train.ttl_pd), predictor_cols_basic]
-y_train_pc1 = y_train.loc[pd.notnull(x_train.ttl_pd), ]
-
-x_test_pc1 = x_test.loc[pd.notnull(x_test.ttl_pd), predictor_cols_basic]
-y_test_pc1 = y_test.loc[pd.notnull(x_test.ttl_pd), ]
-
+x_train_pc1 = x_train_XF[predictor_cols_basic]
+x_test_pc1 = x_test_XF[predictor_cols_basic]
 
 mdl_rf1 = RandomForestClassifier(random_state=RANDOM_SEED)
-mdl_rf1.fit(x_train_pc1, y_train_pc1)
-mdl_rf1.score(x_train_pc1, y_train_pc1)   #0.988
-mdl_rf1.score(x_test_pc1, y_test_pc1)  #0.9398
+mdl_rf1.fit(x_train_pc1, y_train)
+mdl_rf1.score(x_train_pc1, y_train)   #0.9887
+mdl_rf1.score(x_test_pc1, y_test)  #0.9386
 
 #look at the confusion matrix
 y_pred_rf1 = mdl_rf1.predict(x_test_pc1)
-actl_and_pred_rf1 = y_test_pc1.copy()
+actl_and_pred_rf1 = y_test.copy()
 actl_and_pred_rf1['predicted_late_flag'] = y_pred_rf1
 actl_and_pred_rf1.columns = ['actual_late_flag', 'predicted_late_flag']
 
 actl_and_pred_rf1.groupby(['actual_late_flag', 'predicted_late_flag']).agg(cnt=('actual_late_flag', 'count')).reset_index()
 # model is better with ship limit miss amt (correctly about 2x as many true lates, and also has fewer false positives )
 #   actual_late_flag  predicted_late_flag    cnt
-#                 0                    0  22352
-#                 0                    1     67
-#                 1                    0   1378
-#                 1                    1    199
+#                 0                    0  22338
+#                 0                    1     79
+#                 1                    0   1394
+#                 1                    1    183
 
-#old (previous test/train split)
+#old (previous test/train split, and not scaled, but that shouldn't change the outcome)
 #   actual_late_flag  predicted_late_flag    cnt
 #                 0                    0  21987
 #                 0                    1     60
@@ -839,9 +966,9 @@ actl_and_pred_rf1.groupby(['actual_late_flag', 'predicted_late_flag']).agg(cnt=(
 
 
 #calculate precision-recall score (avg?), curves
-precision_rf1, recall_rf1, _ = precision_recall_curve(y_test_pc1, y_pred_rf1)
+precision_rf1, recall_rf1, _ = precision_recall_curve(y_test, y_pred_rf1)
 
-average_precision_rf1 = average_precision_score(y_test_pc1, y_pred_rf1)
+average_precision_rf1 = average_precision_score(y_test, y_pred_rf1)
 print('Average precision-recall score: {0:0.2f}'.format(average_precision_rf1))
 #0.15   #  :(
 
@@ -866,10 +993,10 @@ feature_importances_rf1.info()
 
 
 
-roc_auc_val_rf1 = roc_auc_score(y_test_pc1, y_pred_rf1)
+roc_auc_val_rf1 = roc_auc_score(y_test, y_pred_rf1)
 print(roc_auc_val_rf1)  #0.562
 
-fpr_rf1, tpr_rf1, thresholds_rf1 = roc_curve(y_test_pc1, y_pred_rf1)
+fpr_rf1, tpr_rf1, thresholds_rf1 = roc_curve(y_test, y_pred_rf1)
 
 
 #plot the ROC curve
@@ -890,6 +1017,92 @@ plt.show()
 
 
 
+# ---------------------------------------------------------------------------
+#   random forest classifier with addnl columns ("major" categorical factors)
+# ---------------------------------------------------------------------------
+#x_train_pc.info(verbose=True, max_cols = 1000000)
+
+mdl_rf2 = RandomForestClassifier(random_state=RANDOM_SEED)
+mdl_rf2.fit(x_train_XF[predictor_cols_long], y_train)
+mdl_rf2.score(x_train_XF[predictor_cols_long], y_train)  #0.9895
+mdl_rf2.score(x_test_XF[predictor_cols_long], y_test)    #0.9373
+    #train is performing better than test - is overfitting.   --> adding more columns won't help, will only make it further overfit
+    
+#look at the predicted vals, confusion matrix
+y_pred_rf2 = mdl_rf2.predict(x_test_XF[predictor_cols_long])
+actl_and_pred_rf2 = y_test.copy()
+actl_and_pred_rf2['predicted_late_flag'] = y_pred_rf2
+actl_and_pred_rf2.columns = ['actual_late_flag', 'predicted_late_flag']
+
+actl_and_pred_rf2.groupby(['actual_late_flag', 'predicted_late_flag']).agg(cnt=('actual_late_flag', 'count')).reset_index()
+# model is better with ship limit miss amt (correctly about 2x as many true lates, and also has fewer false positives )
+#   actual_late_flag  predicted_late_flag    cnt
+#                 0                    0  22331
+#                 0                    1     86
+#                 1                    0   1417
+#                 1                    1    160
+
+#this is WORSE! than the RF with no categorical columns  - has more false positives and more false negatives
+    #probably not a huge diff  but certainly not a game changing improvement
+    
+    
+
+
+#calculate precision-recall score (avg?), curves
+precision_rf2, recall_rf2, _ = precision_recall_curve(y_test, y_pred_rf2)
+
+average_precision_rf2 = average_precision_score(y_test, y_pred_rf2)
+print('Average precision-recall score: {0:0.2f}'.format(average_precision_rf2))
+#0.13   #  :(
+
+#plot precision/recall curve
+# ----------------------------
+# In matplotlib < 1.5, plt.fill_between does not have a 'step' argument
+step_kwargs = ( {'step': 'post'} if 'step' in signature(plt.fill_between).parameters else {} )
+
+plt.xlabel('Recall')
+plt.ylabel('Precision')
+plt.ylim([0.0, 1.05])
+plt.xlim([0.0, 1.0])
+plt.title('Precision-Recall curve:  Random Forest.   AP={0:0.2f}'.format(average_precision_rf2))
+plt.step(recall_rf2, precision_rf2, color='b', alpha=0.2, where='post')
+plt.fill_between(recall_rf2, precision_rf2, alpha=0.2, color='b', **step_kwargs)
+
+#get feature importances
+feature_importances_rf2 = pd.DataFrame( {'Feature_name': predictor_cols_long, 'Importance': list(mdl_rf2.feature_importances_) } )
+feature_importances_rf2 = feature_importances_rf2.sort_values('Importance', ascending=False)
+feature_importances_rf2.head(100)
+feature_importances_rf2.info()
+
+
+
+#mdl_rf2.get_params()
+
+
+
+roc_auc_val_rf2 = roc_auc_score(y_test, y_pred_rf2)
+print(roc_auc_val_rf2)  #0.555
+
+fpr_rf2, tpr_rf2, thresholds_rf2 = roc_curve(y_test, y_pred_rf2)
+
+
+#plot the ROC curve
+plt.plot(fpr_rf2, tpr_rf2, lw=2, label='ROC curve for Random Forest model (area = %0.2f)' % roc_auc_val_rf2)
+plt.plot([0,1],[0,1],color='grey', linestyle='--', lw=1)
+plt.legend(loc="lower right", frameon = False)
+plt.title('ROC curve - Random Forest model with addnl predictors')
+plt.savefig(outpt_fldr + '/ROC_rf2.jpg', 
+    bbox_inches = 'tight', dpi=None, facecolor='w', edgecolor='b', 
+    orientation='portrait', papertype=None, format=None, 
+    transparent=True, pad_inches=0.25, frameon=None)  
+plt.show()
+
+
+
+
+
+x_train_XF.reset_index()
+y_train.reset_index()
 
 
 
@@ -899,82 +1112,89 @@ plt.show()
 #        hopefully that will make it more sensitive 
 # ================================================
 
-nbr_late_delivs = sum(x_train.late_delivery_flag)  #6394
+nbr_late_delivs = sum(y_train.late_delivery_flag)  #4912
 
 #bring along the Rww_ID temporarily so that we can use it to create the validation set
-predictor_cols2 = predictor_cols.copy()
-predictor_cols2.append('Rww_ID') 
+predictor_cols_long2 = predictor_cols_long.copy()
+predictor_cols_long2.append('Rww_ID') 
 predicted_col2 = predicted_col.copy()
 predicted_col2.append('Rww_ID')
 #create the undersampled (us) dataset
 #take a 25% sample of the records where delivery was late    ==> we should have about 6394*0.75 (=4795.5) records in training
-x_train_us, x_test_us, y_train_us, y_test_us = train_test_split(x_train.loc[x_train.late_delivery_flag == True, predictor_cols2], 
-                                                                x_train.loc[x_train.late_delivery_flag == True, predicted_col2],
+x_train_us_late, x_test_us_late, y_train_us_late, y_test_us_late = train_test_split( x_train_XF.loc[y_train.late_delivery_flag == 1, predictor_cols_long2], 
+                                                                                     y_train.loc[y_train.late_delivery_flag == 1, predicted_col],
                                                                 test_size = 0.25)
-#x_train_us.shape  #  (4795, 13)     good, matches expected size
-#x_test_us.shape  #  (1599, 13)     good, matches expected size
+#x_train_us_late.shape  #  (3684, 314)     good, matches expected size
+#x_test_us_late.shape  #  (1228, 314)     good, matches expected size
 
-x_train_us_0, x_test_us_0, y_train_us_0, y_test_us_0 = train_test_split(x_train.loc[x_train.late_delivery_flag == False, predictor_cols2],
-                                                                        x_train.loc[x_train.late_delivery_flag == False, predicted_col2],
-                                                                        train_size = 4795, test_size = 1599) 
-#x_train_us_0.shape  #  (4795, 13)     good, matches expected size
-#x_test_us_0.shape  #  (1599, 13)     good, matches expected size
-#sum(y_train_us_0.late_delivery_flag)
+x_train_us_ontime, x_test_us_ontime, y_train_us_ontime, y_test_us_ontime = train_test_split( x_train_XF.loc[y_train.late_delivery_flag == 0, predictor_cols_long2],
+                                                                                                            y_train.loc[y_train.late_delivery_flag == 0, predicted_col],
+                                                                        train_size = 3684, test_size = 1228) 
+#x_train_us_ontime.shape  #  (3684, 314)     good, matches expected size
+#x_test_us_ontime.shape  #  (1228, 314)     good, matches expected size
+#sum(y_train_us_ontime.late_delivery_flag)   #0, as expected
 
 #merge the samples for late and ontime together
-x_train_us = x_train_us.append(x_train_us_0)
-y_train_us = y_train_us.append(y_train_us_0)
+x_train_us = x_train_us_late.append(x_train_us_ontime)
+y_train_us = y_train_us_late.append(y_train_us_ontime)
+#x_train_us.info()
 
-#x_train.info()
+x_test_us = x_test_us_late.append(x_test_us_ontime)
+y_test_us = y_test_us_late.append(y_test_us_ontime)
+
 #for the validation, run on all the records that were not used in training, or on these test records???
-x_test_us = x_test_us.append(x_test_us_0)
-y_test_us = y_test_us.append(y_test_us_0)
-
-x_valdn_us = x_train.loc[ ~ x_train.Rww_ID.isin(x_train_us.Rww_ID) , predictor_cols]
-y_valdn_us = x_train.loc[ ~ x_train.Rww_ID.isin(y_train_us.Rww_ID) , predicted_col]
-    #x_valdn_us.shape  # 85048, 13
-    #y_valdn_us.shape  # 85048, 1
+x_valdn_us = x_train_XF.loc[ ~ x_train_XF.Rww_ID.isin(x_train_us.Rww_ID) , predictor_cols_long]
+y_valdn_us = y_train.loc[ ~ x_train_XF.Rww_ID.isin(x_train_us.Rww_ID) , predicted_col]
+    #x_valdn_us.shape  # 64609, 313
+    #y_valdn_us.shape  # 64609, 1
 
 
 #drop the Rww_ID so it doesn't get fed to the model
 x_train_us.drop('Rww_ID', axis='columns', inplace = True)
 x_test_us.drop('Rww_ID', axis='columns', inplace = True)
-y_train_us.drop('Rww_ID', axis='columns', inplace = True)
-y_test_us.drop('Rww_ID', axis='columns', inplace = True)
+#y_train_us.drop('Rww_ID', axis='columns', inplace = True)
+#y_test_us.drop('Rww_ID', axis='columns', inplace = True)
 
 
 
 
 #fit and score a Random Forest classifier
-mdl_rf2_us = RandomForestClassifier(n_estimators = 100, random_state=RANDOM_SEED)
-mdl_rf2_us.fit(x_train_us, y_train_us)
-mdl_rf2_us.score(x_test_us, y_test_us)   #0.662. up from 0.643 with n_estimators = 10 (default)
-mdl_rf2_us.score(x_valdn_us, y_valdn_us)  #0.71  :( :(
+mdl_rf3_us = RandomForestClassifier(n_estimators = 100, random_state=RANDOM_SEED)
+mdl_rf3_us.fit(x_train_us, y_train_us)
+mdl_rf3_us.score(x_train_us, y_train_us)   #1.0  --just a bit :) too overfit
+mdl_rf3_us.score(x_test_us, y_test_us)   #0.717   -- 
+mdl_rf3_us.score(x_valdn_us, y_valdn_us)  #0.718
 
-
-y_pred_rf_us = mdl_rf2_us.predict(x_valdn_us)
-actl_and_pred_rf_us = y_valdn_us.copy()
-actl_and_pred_rf_us['predicted_late_flag'] = y_pred_rf_us
-actl_and_pred_rf_us.columns = ['actual_late_flag', 'predicted_late_flag']
 
 #look at the confusion matrix
-actl_and_pred_rf_us.groupby(['actual_late_flag', 'predicted_late_flag']).agg(cnt=('actual_late_flag', 'count')).reset_index()
+y_pred_rf3 = mdl_rf3_us.predict(x_valdn_us)
+actl_and_pred_rf3 = y_valdn_us.copy()
+actl_and_pred_rf3['predicted_late_flag'] = y_pred_rf3
+actl_and_pred_rf3.columns = ['actual_late_flag', 'predicted_late_flag']
+actl_and_pred_rf3.groupby(['actual_late_flag', 'predicted_late_flag']).agg(cnt=('actual_late_flag', 'count')).reset_index()
 # model predicts a lot more of the actual late values, but is way overpredicting late values for the on-time deliveries
 #     this would only make economic sense if the cost of a false positive was WAY less than the cost of a false negative
 #  actual_late_flag  predicted_late_flag    cnt
-#                 0                    0  60382
-#                 0                    1  23067
-#                 1                    0    667
-#                 1                    1    932
+#                 0                    0    45531
+#                 0                    1    17850
+#                 1                    0    364
+#                 1                    1    864
+
+#on the "test" data   this is balanced 1-1 between late and ontime so it doesn't feel good to use (and it's not doing a whole lot better or worse than the 'valdn' set either
+#  actual_late_flag  predicted_late_flag    cnt
+#                 0                    0    898
+#                 0                    1    330
+#                 1                    0    364
+#                 1                    1    864
 
 
 
 #calculate precision-recall score (avg?), curves
-precision_rf_us, recall_rf_us, _ = precision_recall_curve(y_valdn_us, y_pred_rf_us)
+precision_rf3, recall_rf3, _ = precision_recall_curve(y_valdn_us, y_pred_rf3)
 
-average_precision_rf_us = average_precision_score(y_valdn_us, y_pred_rf_us)
-print('Average precision-recall score: {0:0.2f}'.format(average_precision_rf_us))
-#0.15   #  :(
+average_precision_rf3 = average_precision_score(y_valdn_us, y_pred_rf3)
+print('Average precision-recall score: {0:0.2f}'.format(average_precision_rf3))
+#0.04   #  :(
 
 #plot precision/recall curve
 # ----------------------------
@@ -985,28 +1205,28 @@ plt.xlabel('Recall')
 plt.ylabel('Precision')
 plt.ylim([0.0, 1.05])
 plt.xlim([0.0, 1.0])
-plt.title('Precision-Recall: Random Forest w Undersampling.   AP={0:0.2f}'.format(average_precision_rf_us))
-plt.step(recall_rf_us, precision_rf_us, color='b', alpha=0.2, where='post')
-plt.fill_between(recall_rf_us, precision_rf_us, alpha=0.2, color='b', **step_kwargs)
-plt.savefig(outpt_fldr + '/precision_recall_rf_us.jpg', 
+plt.title('Precision-Recall: Random Forest w Undersampling.   AP={0:0.2f}'.format(average_precision_rf3))
+plt.step(recall_rf3, precision_rf3, color='b', alpha=0.2, where='post')
+plt.fill_between(recall_rf3, precision_rf3, alpha=0.2, color='b', **step_kwargs)
+plt.savefig(outpt_fldr + '/precision_recall_rf3.jpg', 
     bbox_inches = 'tight', dpi=None, facecolor='w', edgecolor='b', 
     orientation='portrait', papertype=None, format=None, 
     transparent=True, pad_inches=0.25, frameon=None)  
 plt.show()
 
 
-roc_auc_val_rf_us = roc_auc_score(y_valdn_us, y_pred_rf_us)
-print(roc_auc_val_rf_us)  #0.669, up from 0.643
+roc_auc_val_rf3 = roc_auc_score(y_valdn_us, y_pred_rf3)
+print(roc_auc_val_rf3)  #0.711, up from 0.643
 
-fpr_rf_us, tpr_rf_us, thresholds_rf_us = roc_curve(y_valdn_us, y_pred_rf_us)
+fpr_rf3, tpr_rf3, thresholds_rf3 = roc_curve(y_valdn_us, y_pred_rf3)
 
 
 #plot the ROC curve
-plt.plot(fpr_rf_us, tpr_rf_us, lw=2, label='ROC curve for Random Forest model (area = %0.2f)' % roc_auc_val_rf_us)
+plt.plot(fpr_rf3, tpr_rf3, lw=2, label='ROC curve for Random Forest model (area = %0.2f)' % roc_auc_val_rf3)
 plt.plot([0,1],[0,1],color='grey', linestyle='--', lw=1)
 plt.legend(loc="lower right", frameon = False)
 plt.title('ROC curve - Random Forest model')
-plt.savefig(outpt_fldr + '/ROC_rf_us.jpg', 
+plt.savefig(outpt_fldr + '/ROC_rf3.jpg', 
     bbox_inches = 'tight', dpi=None, facecolor='w', edgecolor='b', 
     orientation='portrait', papertype=None, format=None, 
     transparent=True, pad_inches=0.25, frameon=None)  
@@ -1018,100 +1238,74 @@ plt.show()
 
 
 
-#predictor_cols_basic = ['est_delivery_time_days', 'shipping_limit_missed', 'shipping_limit_miss_amt', 'days_remaining', 'distance_km', 'approval_time_days', 'nbr_items',
-#                  'nbr_sellers', 'nbr_products', 'ttl_wt', 'ttl_length', 'ttl_height', 'ttl_width', 'states_same_or_diff']
-#
-#
-predictor_cols = predictor_cols_basic + predictor_cols_ohe
 
 
 
-# ---------------------------------------------------------------------------
-#   random forest classifier with addnl columns ("major" categorical factors)
-# ---------------------------------------------------------------------------
-#TODO:   fix to exclude the row that is missing ttl_pd info, rename other vars _rf3
-x_train_pc = x_train[predictor_cols]
-x_test_pc = x_test[predictor_cols]
+#Naive Bayesian classifier - Gaussian
+from sklearn.naive_bayes import GaussianNB
+
+#initialize
+mdl_GNB = GaussianNB()
+
+mdl_GNB.fit(x_train_XF[predictor_cols_long], y_train)
+
+mdl_GNB.classes_  #0 and 1
+mdl_GNB.class_count_   #array([67065.,  4912.])    =>    67065 zeros,  4912 ones
+mdl_GNB.class_prior_    #array([0.93175598, 0.06824402])   ==   67065/(67065 + 4912),  and 4912/(67065 + 4912)
 
 
-mdl_rf3 = RandomForestClassifier(random_state=RANDOM_SEED)
-mdl_rf3.fit(x_train_pc, y_train)
-mdl_rf3.score(x_train_pc, y_train)  #0.9885
-mdl_rf3.score(x_test_pc, y_test)    #0.938
-    #train is performing better than test - is overfitting.   --> adding more columns won't help, will only make it further overfit
-    
+mdl_rslts_GNB = pd.DataFrame(mdl_GNB.predict_proba(x_train_XF[predictor_cols_long])[:,1])
+mdl_rslts_GNB.columns = ['prob_GNB']
+mdl_rslts_GNB['prob_GNB'].value_counts()
 
-y_pred_rf = mdl_rf3.predict(x_test_pc)
-actl_and_pred_rf = y_test.copy()
-actl_and_pred_rf['predicted_late_flag'] = y_pred_rf
-actl_and_pred_rf.columns = ['actual_late_flag', 'predicted_late_flag']
+y_pred_GNB = mdl_GNB.predict(x_train_XF[predictor_cols_long])
 
-#look at the confusion matrix
-actl_and_pred_rf.groupby(['actual_late_flag', 'predicted_late_flag']).agg(cnt=('actual_late_flag', 'count')).reset_index()
-# model is better with ship limit miss amt (correctly about 2x as many true lates, and also has fewer false positives )
+mdl_GNB.score(x_train_XF[predictor_cols_long], y_train)  #0.278
+mdl_GNB.score(x_test_XF[predictor_cols_long], y_test)  #0.2674
+
+
+
+y_pred_gnb = mdl_GNB.predict(x_test_XF[predictor_cols_long])
+actl_and_pred_gnb = y_test.copy()
+actl_and_pred_gnb['predicted_late_flag'] = y_pred_gnb
+actl_and_pred_gnb.columns = ['actual_late_flag', 'predicted_late_flag']
+
+actl_and_pred_gnb.groupby(['actual_late_flag', 'predicted_late_flag']).agg(cnt=('actual_late_flag', 'count')).reset_index()
+# found the most late ones but WAY WAY WAY worse on false positives
 #   actual_late_flag  predicted_late_flag    cnt
-#                 0                    0  22324
-#                 0                    1     95
-#                 1                    0   1392
-#                 1                    1    185
-
-#this is WORSE! than the RF with no categorical columns  - has more false positives and the exact same # of false negatives
-#   actual_late_flag  predicted_late_flag    cnt
-#                 0                    0  22338
-#                 0                    1     81
-#                 1                    0   1392
-#                 1                    1    185
+#                 0                    0   5003
+#                 0                    1  17414
+#                 1                    0    163
+#                 1                    1   1414
 
 
 
-#calculate precision-recall score (avg?), curves
-precision_rf, recall_rf, _ = precision_recall_curve(y_test, y_pred_rf)
+roc_auc_score_GNB = roc_auc_score(y_train, mdl_rslts_GNB['prob_GNB'])
+roc_auc_score_GNB
+#0.584
 
-average_precision_rf = average_precision_score(y_test, y_pred_rf)
-print('Average precision-recall score: {0:0.2f}'.format(average_precision_rf))
-#0.14   #  :(
-
-#plot precision/recall curve
-# ----------------------------
-# In matplotlib < 1.5, plt.fill_between does not have a 'step' argument
-step_kwargs = ( {'step': 'post'} if 'step' in signature(plt.fill_between).parameters else {} )
-
-plt.xlabel('Recall')
-plt.ylabel('Precision')
-plt.ylim([0.0, 1.05])
-plt.xlim([0.0, 1.0])
-plt.title('Precision-Recall curve:  Random Forest.   AP={0:0.2f}'.format(average_precision_rf))
-plt.step(recall_rf, precision_rf, color='b', alpha=0.2, where='post')
-plt.fill_between(recall_rf, precision_rf, alpha=0.2, color='b', **step_kwargs)
-
-#get feature importances
-feature_importances_rf3 = pd.DataFrame( {'Feature_name': list(x_train_pc.columns), 'Importance': list(mdl_rf3.feature_importances_) } )
-feature_importances_rf3 = feature_importances_rf3.sort_values('Importance', ascending=False)
-feature_importances_rf3.head(100)
-feature_importances_rf3.info()
-
-
-
-#mdl_rf3.get_params()
-
-
-
-roc_auc_val_rf = roc_auc_score(y_test, y_pred_rf)
-print(roc_auc_val_rf)  #0.555
-
-fpr_rf, tpr_rf, thresholds_rf = roc_curve(y_test, y_pred_rf)
-
+fpr_GNB, tpr_GNB, thresholds_GNB = roc_curve(y_train, mdl_rslts_GNB['prob_GNB'])
 
 #plot the ROC curve
-plt.plot(fpr_rf, tpr_rf, lw=2, label='ROC curve for Random Forest model (area = %0.2f)' % roc_auc_val_rf)
+plt.plot(fpr_GNB, tpr_GNB, lw=2, label='ROC curve (area = %0.2f)' % roc_auc_score_GNB)
 plt.plot([0,1],[0,1],color='grey', linestyle='--', lw=1)
 plt.legend(loc="lower right", frameon = False)
-plt.title('ROC curve - Random Forest model')
-plt.savefig(outpt_fldr + '/ROC_rf.jpg', 
+plt.title('ROC curve - naive Bayesian model')
+plt.savefig(outpt_fldr + '/ROC_GNB.jpg', 
     bbox_inches = 'tight', dpi=None, facecolor='w', edgecolor='b', 
     orientation='portrait', papertype=None, format=None, 
     transparent=True, pad_inches=0.25, frameon=None)  
 plt.show()
+
+
+#use cross validation to see how much variation there is in the scores depending on the data input
+#scores_GNB = cross_val_score(mdl_GNB, X_train, y_train, cv=_stratifd_KFold_iterator)
+#print(scores_GNB)
+#print('Mean score is:  {0:.4f}'.format(scores_GNB.mean()))  #0.8846
+#print('St devn of score is:  {0:.4f}'.format(scores_GNB.std()))   #0.0006
+
+
+
 
 
 
